@@ -34,6 +34,7 @@
 | [`06-phases-and-tasks.md`](06-phases-and-tasks.md) | The build: phases P0–P9 broken into tasks with files, interfaces, test cases and acceptance criteria | During the build |
 | [`07-testing-and-eval.md`](07-testing-and-eval.md) | Fixture strategy (recorded Textract JSON), fakes, golden dataset, eval metrics and report | Before P2 |
 | [`08-integration-scan-prompt.md`](08-integration-scan-prompt.md) | Read-only prompt: an agent scans a host project and writes an integration report (where and how IDP plugs in) | Fit check only, or as step 1 of 09 |
+| [`../../../research/vendors/`](../../../research/vendors/README.md) | Research + implementation plans for **VLM Run** and **Meibel** as extra engines, a comparison with Textract, and the shared adapter (proposed D14) | Before deciding on a second engine |
 | [`09-host-implementation-prompt.md`](09-host-implementation-prompt.md) | **The one prompt for building it in the host.** Scan (08) → host conventions map → checkpoint → build the requested scope task by task in the host's own style | When you start building |
 
 ---

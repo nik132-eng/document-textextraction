@@ -10,6 +10,7 @@
 - [x] Host adaptation rules (`00` §9, decision D13). Build-in-host notes in `06`
 - [x] One-shot host implementation prompt (`09`)
 - [x] Guided AWS walkthrough (`01a`)
+- [x] Vendor research: VLM Run and Meibel, with a comparison, a shared engine adapter and implementation plans ([`docs/research/vendors/`](../../../research/vendors/README.md))
 
 ## Left to do — before or alongside the build (not coding)
 
@@ -31,6 +32,9 @@
 | Q12 | IaC tool and location (the host's CDK/Terraform folder, or `infra/idp/`) | Ops | Track 2 |
 | Q13 | Real package scope instead of `@your-org/idp`; the `HOST_NAME_DENYLIST` values | Tech lead | P0 Task 0.6, P9 Task 9.10 |
 | Q14 | Textract bundled pricing for FORMS+TABLES+QUERIES: confirm against the first invoice (`04` §9) | Ops / finance | Cost report accuracy only |
+| Q15 | Accept D14 (multi-engine: Textract default + schema engines)? ([shared adapter](../../../research/vendors/shared-engine-adapter.md) §1) | Tech lead + product | Shared tasks S1–S8 |
+| Q16 | VLM Run: go to Pro ($799/mo) and sign the BAA? Send the vendor questions ([research §8](../../../research/vendors/vlm-run/research.md)) | Product + compliance | VLM Run with real PHI (V0) |
+| Q17 | Meibel: send the vendor questions ([research §8](../../../research/vendors/meibel/research.md)). Pursue only if a BAA/BYOC is available and agents/Q&A are wanted | Product + compliance | Meibel plan (MB0) |
 
 ### 2. AWS (see [`01a`](01a-aws-walkthrough.md))
 

@@ -12,6 +12,7 @@ This repo holds the **plan** for an Intelligent Document Processing feature buil
 | See what is left to do | [`STATUS.md`](docs/superpowers/plans/2026-10-28-textract-idp/STATUS.md) |
 | Set up AWS | [`01a-aws-walkthrough.md`](docs/superpowers/plans/2026-10-28-textract-idp/01a-aws-walkthrough.md) |
 | Build it in the main project (one prompt) | [`09-host-implementation-prompt.md`](docs/superpowers/plans/2026-10-28-textract-idp/09-host-implementation-prompt.md) |
+| Compare Textract with VLM Run and Meibel, and see their plans | [`docs/research/vendors/`](docs/research/vendors/README.md) |
 | Only check how it would fit a project | [`08-integration-scan-prompt.md`](docs/superpowers/plans/2026-10-28-textract-idp/08-integration-scan-prompt.md) |
 
 ## Source documents
