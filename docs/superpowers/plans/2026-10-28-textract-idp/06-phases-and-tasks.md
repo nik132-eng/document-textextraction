@@ -2,6 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: superpowers:subagent-driven-development or superpowers:executing-plans. Each task follows TDD: write the failing test → run it (fails) → implement → run it (passes) → commit. Read `00-overview.md` §4 *Global Constraints* first. Every task implicitly includes them.
 
+> **Host build (the normal case):** read `00` §9 first. In a host repo:
+> - every **Files:** path is a standalone default. Map it to the host layout through `docs/idp/ADAPTATION.md`.
+> - every test snippet lists the **cases to assert**. Write them in the host's test runner and style.
+> - interface **names and shapes** (the "Produces" blocks) stay the same, because later tasks depend on them. Casing and file naming may follow the host.
+> - commands such as `npx jest` or `npm run test:e2e` become the host's equivalents (recorded in `ADAPTATION.md`).
+> - Task 0.1 is replaced by "create the IDP module skeleton by mirroring an existing host module". Task 9.10 (packaging) is optional.
+
 Conventions used below:
 - Test commands: `npx jest <path>` (unit), `npm run test:e2e -- <path>` (e2e).
 - Commits use Conventional Commits and end with the attribution line from the repo's contributing guide.
@@ -15,7 +22,9 @@ Conventions used below:
 
 **Files:** Create `package.json`, `tsconfig.json`, `tsconfig.build.json`, `nest-cli.json`, `jest.config.ts`, `jest.e2e.config.ts`, `.gitignore`, `.nvmrc` (`24`), `docker-compose.yml`, `docker/Dockerfile`, `src/main.ts`, `src/app.module.ts`, `README.md`.
 
-- [ ] **Step 1:** `git init` (the folder is not a repo yet). Move the three existing research docs into `docs/research/` and commit them as `docs: import research and workflow docs`.
+> **Standalone build only.** In a host repo, skip this task. Instead, create the IDP module folder by mirroring the closest existing host feature module (module file, barrel, config, test setup), and stop there. Commit it in the host's commit style.
+
+- [ ] **Step 1:** Create a new, empty service repo (the plan repo stays plan-only). Copy the plan folder and the three source docs into `docs/` and commit them as `docs: import IDP plan and research`.
 - [ ] **Step 2:** Scaffold with `npx @nestjs/cli@12 new . --package-manager npm --skip-git --strict`. If the CLI scaffolds Vitest instead of Jest, keep Jest per Global Constraints: remove Vitest, then `npm i -D jest @swc/jest @swc/core @types/jest supertest @types/supertest`.
 - [ ] **Step 3:** `tsconfig.json`: add `"noUncheckedIndexedAccess": true`, `"strict": true`. Keep whatever `module`/`moduleResolution` the CLI emits (record it in README; Task 0.3 depends on it).
 - [ ] **Step 4:** `docker-compose.yml`:

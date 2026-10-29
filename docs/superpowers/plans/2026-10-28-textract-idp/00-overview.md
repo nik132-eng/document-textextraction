@@ -13,7 +13,9 @@
 - [document-extraction-system-spec-1.md](../../../../document-extraction-system-spec-1.md) — first-phase spec. It is still the source for the form catalogs (§8), canonical dictionary (§9), normalization/validation rules (§12), flattener (§13), API (§14) and the eval metrics (§17). Its **LLM provider layer (§10–11) is replaced** by the Textract layer in this plan.
 - [Multi-Form Document Extraction for NestJS…](../../../../Multi-Form%20Document%20Extraction%20for%20NestJS_%20CMS-1500,%20UB-04%20and%20B.md) — research. It contributes the storage principles: immutable raw output, EAV field rows, canonical plus native keys, and provenance (page, bbox, confidence).
 
-**Status:** Plan only. No code is written yet.
+**Status:** Plan complete. No code is written in this repo, and none will be: this repo holds the plan only. The build happens **inside the host ("main") project** through the one-shot prompt in [`09-host-implementation-prompt.md`](09-host-implementation-prompt.md). That prompt follows the host's own coding standards (§9). What is still open (decisions, AWS, test data) is tracked in [`STATUS.md`](STATUS.md).
+
+**Agents start here:** read this file fully, then §9 (host adaptation) before any other file. The code snippets in 02–06 show the **behaviour and contracts** to build. They are not literal code to paste into a host whose stack differs.
 
 ---
 
@@ -21,15 +23,18 @@
 
 | File | What it holds | Read when |
 |---|---|---|
-| `00-overview.md` (this) | Decisions, architecture, global constraints, repo layout, phase index | First |
-| [`01-aws-setup.md`](01-aws-setup.md) | Every manual AWS step (BAA, AI opt-out, KMS, S3, IAM, VPC endpoints, quotas, alarms, budgets, async SNS/SQS role, fixture capture), with JSON policies and CLI | Before P2; ops owner |
+| `00-overview.md` (this) | Decisions, architecture, global constraints, repo layout, phase index, **§9 host adaptation rules** | First |
+| [`STATUS.md`](STATUS.md) | What is done, what is left (decisions, AWS, test data, host prep), phase progress | Any time |
+| [`01a-aws-walkthrough.md`](01a-aws-walkthrough.md) | **Guided** AWS setup: where to click, in what order, how to verify. Dev track (synthetic, ~1 h) and prod track (real PHI) | Before P2; whoever sets up AWS |
+| [`01-aws-setup.md`](01-aws-setup.md) | Reference for every manual AWS step (BAA, AI opt-out, KMS, S3, IAM, VPC endpoints, quotas, alarms, budgets, async SNS/SQS role, fixture capture), with JSON policies and CLI | Looked up from 01a; ops owner |
 | [`02-data-model.md`](02-data-model.md) | **Schema plan, written before any code.** Full Prisma schema, the reasons for each change from spec-1, indexes, migrations, retention | Before P0 |
 | [`03-form-definition-dsl.md`](03-form-definition-dsl.md) | The extensibility core: the declarative form definition, canonical dictionary, rule library, and how to add a new form with no pipeline change | Before P3 |
 | [`04-textract-layer.md`](04-textract-layer.md) | Textract client, call strategy, block-graph parser → Evidence model, field resolvers (query / key / region / checkbox / table / grid / layout), confidence, cost accounting | Before P2 |
 | [`05-pipeline-and-api.md`](05-pipeline-and-api.md) | Stage contracts, classification and segmentation algorithm, normalization, validation, flattening, review, autofill, apply contract, integration events, REST API | Before P1 |
 | [`06-phases-and-tasks.md`](06-phases-and-tasks.md) | The build: phases P0–P9 broken into tasks with files, interfaces, test cases and acceptance criteria | During the build |
-| [`08-integration-scan-prompt.md`](08-integration-scan-prompt.md) | Ready-to-paste prompt that makes an AI agent scan any host project and report where and how to plug IDP in | Before integrating into a host |
 | [`07-testing-and-eval.md`](07-testing-and-eval.md) | Fixture strategy (recorded Textract JSON), fakes, golden dataset, eval metrics and report | Before P2 |
+| [`08-integration-scan-prompt.md`](08-integration-scan-prompt.md) | Read-only prompt: an agent scans a host project and writes an integration report (where and how IDP plugs in) | Fit check only, or as step 1 of 09 |
+| [`09-host-implementation-prompt.md`](09-host-implementation-prompt.md) | **The one prompt for building it in the host.** Scan (08) → host conventions map → checkpoint → build the requested scope task by task in the host's own style | When you start building |
 
 ---
 
@@ -48,6 +53,7 @@
 | D9 | **Review and apply belong to the host platform.** This service exposes preview/autofill data and records apply events. It never writes `patient` or `claim`. | Human apply only. | Workflow §3.5, §8.4 |
 | D10 | **No A2I, no Comprehend custom classifier, no Textract custom-queries adapters in v1.** Adapters are a documented upgrade path for CMS-1500/UB-04 accuracy. | Cost and complexity. A2I is closed to new customers. | Workflow §5.4 |
 | D11 | **HEIC is not accepted in v1.** Textract accepts JPEG/PNG/PDF/TIFF. sharp's prebuilt binaries cannot decode HEVC-encoded HEIC. | Workflow capture formats are PDF/JPEG/PNG/TIFF. Add `heic-convert` later if phones become a channel. | Workflow §3.1 |
+| D13 | **In a host repo, host conventions win on *how*. The plan wins on *what*.** The product invariants (§9.1) never change. Everything else adopts the host's existing patterns: framework version, ORM, validation, logger, folder layout, tests, style (§9.2). Nothing is invented where the host already has a pattern. | The code has to look like the rest of the host codebase so the host team can own it. The plan's stack is only the default for a standalone build. | User decision |
 | D12 | **An independent product, plug-and-play in two ways:** (a) a standalone service that any platform calls over REST and consumes through outbox events, (b) an embeddable Nest dynamic module `IdpModule.forRoot({...})` that a larger NestJS project imports. Host-specific concerns (auth, entity links, doc-type labels, target DTO profiles, event delivery) sit behind ports with defaults, so no host name or host code lives in the core. | It can be reused across products and clients without forking. Host integration is configuration plus adapters, not changes to the core. See §8. | User decision |
 
 ---
@@ -97,6 +103,8 @@ flowchart TD
 ## 4. Global Constraints
 
 Every task implicitly includes these.
+
+> **Host build:** the stack lines below (Runtime, Framework, DB/Prisma, Validation, Dependency budget, test tooling) are the **standalone defaults**. In a host repo, they are replaced by the host's equivalents through §9.2. Every other line here is a product invariant and applies everywhere.
 
 - **Runtime:** Node `>=24` (LTS). TypeScript `strict: true`, `noUncheckedIndexedAccess: true`.
 - **Framework:** `@nestjs/*` `12.x`. Do not mix major versions.
@@ -290,6 +298,8 @@ export class HostAppModule {}
 
 Exported services for in-process use: `IdpDocumentsService` (ingest, get), `IdpReviewService`, `IdpAutofillService`, `IdpFormRegistry`.
 
+**Mode B-inline (the usual case when building inside the "main" project):** the module's source lives in the host repo, in the host's module folder (e.g. `src/modules/idp/`, or `libs/idp/` in a monorepo), not in an npm package. It is written in the host's style (§9). The boundary rules stay the same: one self-contained module, host code calls only its public barrel (`index.ts`), the IDP owns its tables, ports for host concerns, and no imports from IDP internals elsewhere in the host. That way it can still be pulled out into a package later (Task 9.10).
+
 ### 8.3 Ports (host seams) and their defaults
 
 | Port | Responsibility | Default (standalone) |
@@ -309,3 +319,53 @@ Exported services for in-process use: `IdpDocumentsService` (ingest, get), `IdpR
 - The S3 key prefix is configurable (`STORAGE_PREFIX`) so several hosts can share a bucket safely.
 - Semantic versioning. Breaking changes to REST, events, the `index.ts` exports or the canonical dictionary need a major version bump.
 - Publishing: the Docker image (Mode A) and an npm package `@your-org/idp` built from the same source (Mode B, P9 Task 9.10).
+
+---
+
+## 9. Building inside a host codebase (host conventions win)
+
+This section governs every task in `06` when the code is written inside an existing project. An agent that follows `09-host-implementation-prompt.md` records how each rule applies in the host file `docs/idp/ADAPTATION.md`, then builds from that.
+
+### 9.1 Product invariants — keep these in every host
+
+1. **Engine:** Amazon Textract only in v1 (D1). An engine-neutral **Evidence** model sits between Textract output and form mapping (D4). Mappers never read Textract blocks.
+2. **Forms are data.** Form definitions are declarative and validated at boot (D5). Adding a form touches only the definitions folder, fixtures and golden data (§7).
+3. **Raw output is kept.** Every Textract response is stored as immutable gzip JSON and indexed in `TextractCall` (D6). Remap reuses it at no Textract cost.
+4. **Data model semantics from `02`:** the same entities, columns, statuses and constraints. That includes one current extraction per segment, sha256 dedupe per tenant, `tenantId` on every row, EAV field rows with canonical and native keys plus provenance. Express them in the **host's** ORM and migration tool. The Prisma schema in `02` is the spec, not a required tool.
+5. **Ownership:** the IDP owns its tables, in its own schema or under a table prefix that matches host naming. It has no foreign keys into host tables. `DocumentLink` stores opaque host ids.
+6. **Human apply only.** The IDP never writes host domain entities (D9). The host saves through its own services, then records an apply event.
+7. **Never invent data.** A blank field becomes null. Low confidence raises a flag and is never guessed (D8).
+8. **PHI safety.** Logs carry IDs, statuses, counts and durations only. Until the BAA and AI opt-out are confirmed, only synthetic data is used.
+9. **Tenancy:** every query is scoped by tenant.
+10. **Idempotent stages** that take IDs and check status before acting.
+11. **Tests never call AWS.** They replay recorded fixtures. Live tests are opt-in.
+12. **Contracts:** the REST semantics and events in `05` §10–11, the canonical dictionary in `03` §3, and outbox payloads that carry IDs only. Route prefixes, the response envelope and error shape may follow host conventions, but the operations and their meaning stay.
+13. **Credentials** come from the AWS default provider chain. No static keys in code or env files.
+14. **Boundary:** IDP code lives in one module. Host code reaches it only through the public barrel, ports and REST.
+
+### 9.2 Implementation choices — adopt the host's
+
+| Plan default (standalone) | Find in the host | Rule |
+|---|---|---|
+| Node 24, NestJS 12 | `package.json`, `.nvmrc`, Dockerfile | Use the host's versions. **Never upgrade a host framework or runtime major as part of IDP work.** If a needed API is missing, use the host-version equivalent and record it. |
+| Prisma 7 + `prisma.config.ts` | ORM, migration folder, naming (snake/camel, plural) | Use the host ORM (Prisma of any version, TypeORM, MikroORM, Knex…) and its migration flow. Keep the `02` semantics, including the partial unique index as raw SQL in a migration. |
+| Zod env + DTOs | `class-validator`/`class-transformer`, Joi, Zod, config service | Use the host's validation and config loading. Keep fail-fast checks for the cross-field rules in `05` §12. |
+| `SafeLogger` | Host logger (pino, winston, Nest Logger), redaction config | Use the host logger. Add the IDP allowlist or redaction **inside** it so invariant 8 holds. |
+| `x-tenant-id` guard / `AuthPort` | Host auth guard, current-user decorator, tenant resolution | Implement `AuthPort` as a thin adapter over the host's existing guard and decorators. |
+| BullMQ + Valkey | Host queue (BullMQ, SQS, Kafka, cron) | Use the host's queue lib if it has one. If not, use BullMQ and list it as a new dependency for approval. |
+| `StoragePort` local/S3 | Existing `S3Service`, bucket config, key helpers | Wrap the host's S3 service in the `StoragePort` adapter. Keep the `02` §6 key layout under `STORAGE_PREFIX`. |
+| `src/<area>/*.service.ts` layout | The host's module and folder layout, file naming, barrel use | Mirror an existing host feature module of similar size. Map every **Files:** path in `06` to it. |
+| Jest + `@swc/jest`, `*.spec.ts` | Host test runner, file placement, factories and fixtures, e2e harness | Write the same test **cases** in the host's runner and style. Fixture JSON stays as data. |
+| Error codes `{ code, message }` | Host exception filter and error envelope | Use the host envelope. Keep the IDP `code` strings inside it. |
+| Conventional Commits | `git log`, CONTRIBUTING, PR template | Use the host's commit and branch style. |
+| `@nestjs/swagger` or yaml | Host API-doc approach | Follow the host. |
+| Lint, format | ESLint/Prettier/Biome config | Run the host's lint, typecheck and test commands after every task. |
+
+### 9.3 Conflict rules
+
+- **Evidence before adopting.** A host pattern counts only when it shows up in at least 2 existing places. Cite `path:line` in `ADAPTATION.md`. If two patterns compete, use the one in the most recently changed code and note the other.
+- **Don't invent.** If the host already does something one way, do it that way, even if the plan shows another. Introduce a new pattern only when the host has none, and then use the plan default.
+- **Invariants win over patterns.** If a host pattern would break §9.1 (for example, the host logger dumps request bodies), keep the invariant with the smallest local adaptation and record it.
+- **New dependencies** need a one-line reason and the user's approval at the checkpoint.
+- **No drive-by changes** to host code outside the IDP module and the agreed insertion points (08 report §4).
+- **Unclear cases:** take the simplest option that keeps the invariants, leave a `SPEC-QUESTION` comment in the host's comment style, and list it in `ADAPTATION.md`.

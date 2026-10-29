@@ -7,7 +7,8 @@ Use this prompt to point an AI coding agent at **any** host project. The agent r
 1. Open the **host project** in your agent (Claude Code, Cursor, Copilot Chat, Windsurf…), with this plan folder accessible (copy it into the host repo under `docs/idp-plan/`, or give the agent the absolute path).
 2. Paste everything inside the `PROMPT` block below as one message. Fill in the three `<<…>>` values first.
 3. The agent works **read-only** and writes one file: `docs/idp-integration/INTEGRATION-REPORT.md` in the host repo.
-4. Review the report, answer its open questions, then run the host-side task list with the superpowers `executing-plans` / `subagent-driven-development` skills.
+4. Review the report and answer its open questions.
+5. To **build** it, use [`09-host-implementation-prompt.md`](09-host-implementation-prompt.md). It runs this scan as its first step, so you do not need to run 08 separately unless you only want a fit check.
 
 ---
 
