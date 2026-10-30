@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { INSURANCE_CARD } from '../../forms/definitions';
+import { INSURANCE_CARD, UB04 } from '../../forms/definitions';
 import { buildJsonSchema } from '../../forms/json-schema.builder';
 import type { FetchFn } from '../http';
 import { MEIBEL_ALLOWED_PATHS, MeibelClient } from './meibel.client';
@@ -159,5 +159,48 @@ describe('MeibelEngine', () => {
     expect(g).toContain('Member ID');
     expect(g).toContain('null when a field is blank');
     expect(g).not.toMatch(/\d/);
+  });
+});
+
+describe('mapMeibelArtifacts: groups and otherFields', () => {
+  it('reads row provenance in bracket or dot form, and otherFields', () => {
+    const output = {
+      ub04: {
+        typeOfBill: '0111',
+        revenueLines: [
+          { revenueCode: '0110', totalCharges: '3000.00' },
+          { revenueCode: '0300', totalCharges: '85.00' },
+        ],
+        otherFields: [{ label: 'REMARKS', value: 'SYNTHETIC' }],
+      },
+    };
+    const provenance = {
+      'ub04.revenueLines.1.revenueCode': {
+        page: 0,
+        bbox: { left: 0.05, top: 0.4, width: 0.04, height: 0.01 },
+        aeq: 0.8,
+      },
+      'revenueLines[0].revenueCode': {
+        page: 0,
+        bbox: { left: 0.05, top: 0.38, width: 0.04, height: 0.01 },
+      },
+      'otherFields[0].value': { page: 1, bbox: { left: 0.1, top: 0.1, width: 0.1, height: 0.1 } },
+    };
+    const fields = mapMeibelArtifacts(UB04, output, provenance, { rootName: 'ub04' });
+    expect(fields.find((f) => f.path === 'revenueLines[1].revenueCode')).toMatchObject({
+      value: '0300',
+      confidence: 80,
+      page: 1,
+    });
+    expect(fields.find((f) => f.path === 'revenueLines[0].revenueCode')!.bbox).not.toBeNull();
+    expect(fields.find((f) => f.path === 'revenueLines[0].totalCharges')).toMatchObject({
+      value: '3000.00',
+      bbox: null,
+    });
+    expect(fields.find((f) => f.path === 'otherFields[0]')).toMatchObject({
+      label: 'REMARKS',
+      value: 'SYNTHETIC',
+      page: 2,
+    });
   });
 });

@@ -6,10 +6,14 @@ const ENGINE_CSV = new RegExp(`^(${ENGINE_NAMES.join('|')})(,(${ENGINE_NAMES.joi
 
 /** Text fields of the multipart upload; the file itself arrives via multer (see UPLOAD_BODY_SCHEMA). */
 export class UploadDocumentDto {
-  @ApiProperty({ example: 'INSURANCE_CARD' })
+  @ApiPropertyOptional({
+    example: 'CMS1500',
+    description: 'Skip auto-classification. Omit to detect the form from the document text',
+  })
+  @IsOptional()
   @IsString()
   @IsNotEmpty()
-  formType!: string;
+  formType?: string;
 
   @ApiPropertyOptional({
     example: 'textract,vlmrun,meibel',
@@ -22,10 +26,18 @@ export class UploadDocumentDto {
 
 export const UPLOAD_BODY_SCHEMA = {
   type: 'object',
-  required: ['file', 'formType'],
+  required: ['file'],
   properties: {
-    file: { type: 'string', format: 'binary', description: 'PDF, PNG, JPEG or TIFF' },
-    formType: { type: 'string', example: 'INSURANCE_CARD' },
+    file: {
+      type: 'string',
+      format: 'binary',
+      description: 'PDF, PNG, JPEG, TIFF or DOCX',
+    },
+    formType: {
+      type: 'string',
+      example: 'CMS1500',
+      description: 'Optional. Omit to auto-detect (falls back to GENERIC)',
+    },
     engines: {
       type: 'string',
       example: 'textract,vlmrun,meibel',

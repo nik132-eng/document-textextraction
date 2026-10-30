@@ -22,13 +22,18 @@ enum ExtractionStatus {
 model Document {
   id          String       @id @default(uuid()) @db.Uuid
   tenantId    String
-  sha256      String
-  mimeType    String
-  sizeBytes   Int
-  pageCount   Int
-  formType    String
-  storageKey  String
-  createdAt   DateTime     @default(now())
+  sha256             String
+  mimeType           String // as uploaded (pdf, png, docx, ...)
+  sizeBytes          Int
+  pageCount          Int
+  formType           String
+  formTypeSource     String       @default("hint") // hint | classifier | fallback
+  classification     Json? // { score, scores[], hadText } - never document text
+  storageKey         String // original upload
+  conversion         String       @default("none") // none | docx-text
+  normalizedKey      String? // converted PDF the engines receive (null = original is used)
+  normalizedMimeType String?
+  createdAt          DateTime     @default(now())
   pages       Page[]
   extractions Extraction[]
 
@@ -87,8 +92,11 @@ model ExtractedField {
   id               String     @id @default(uuid()) @db.Uuid
   tenantId         String
   extractionId     String     @db.Uuid
-  path             String // native path, e.g. member.id
-  label            String
+  path             String // member.id | serviceLines[0].cptHcpcs | otherFields[3]
+  label            String // definition label, or the printed caption for otherFields
+  source           String     @default("field") // field | group | other
+  groupPath        String? // serviceLines
+  rowIndex         Int? // 0-based row within the group
   canonicalKey     String?
   valueType        String // text | date | checkbox | ...
   value            Json? // string | boolean | null, as printed

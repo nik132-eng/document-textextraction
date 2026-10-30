@@ -19,6 +19,8 @@ export interface StoragePort {
 /** Key layout from plan 02 §6, under STORAGE_PREFIX. Keys carry ids only, never file names. */
 export const storageKeys = {
   original: (t: string, d: string, ext: string) => `t/${t}/d/${d}/original.${ext}`,
+  /** Converted PDF (Word -> PDF); engines receive this instead of the original. */
+  normalized: (t: string, d: string) => `t/${t}/d/${d}/normalized.pdf`,
   page: (t: string, d: string, n: number) => `t/${t}/d/${d}/pages/${n}.png`,
   raw: (t: string, d: string, engine: string, extractionId: string) =>
     `t/${t}/d/${d}/engine/${engine}/${extractionId}.json.gz`,

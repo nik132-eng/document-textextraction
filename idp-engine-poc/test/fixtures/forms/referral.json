@@ -1,0 +1,13 @@
+{
+  "id": "REFERRAL",
+  "version": 1,
+  "title": "Referral letter",
+  "description": "Synthetic example of a form added as JSON (FORMS_DIR), no code change",
+  "cues": { "phrases": ["REFERRAL", "REFERRING PHYSICIAN", "REASON FOR REFERRAL"], "minScore": 0.6 },
+  "fields": [
+    { "path": "patient.name", "label": "Patient name", "type": "name", "canonicalKey": "patient.name.full", "keyAliases": ["PATIENT NAME"], "required": true },
+    { "path": "patient.dob", "label": "Date of birth", "type": "date", "canonicalKey": "patient.dob", "keyAliases": ["DATE OF BIRTH", "DOB"] },
+    { "path": "referringPhysician", "label": "Referring physician", "type": "name", "canonicalKey": "provider.referring.name", "keyAliases": ["REFERRING PHYSICIAN"] },
+    { "path": "reason", "label": "Reason for referral", "type": "text", "keyAliases": ["REASON FOR REFERRAL"] }
+  ]
+}

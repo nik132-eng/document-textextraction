@@ -25,15 +25,25 @@ export interface EngineRequest {
   form: FormDefinition;
   /** JSON Schema built from `form` (schema engines send it; Textract ignores it). */
   schema: JsonSchema;
-  /** The original upload. Schema engines send this, so the vendor sees the real file. */
+  /**
+   * The document after conversion (PDF or image; Word arrives here as PDF).
+   * Schema engines send this file, so the vendor sees the real layout.
+   */
   document: { bytes: Buffer; mimeType: string; pageCount: number };
   /** Rasterized pages (PNG, 1-based). Textract sends these, one sync call per page. */
   pages: { pageNumber: number; bytes: Buffer }[];
 }
 
-/** One value per form field, engine-neutral (shared-engine-adapter §5 EvSchemaField). */
+/**
+ * One extracted value, engine-neutral (shared-engine-adapter §5 EvSchemaField). Paths:
+ *   scalar      'patient.dob'
+ *   group cell  'serviceLines[0].cptHcpcs'
+ *   other value 'otherFields[3]'  (label = the printed caption)
+ */
 export interface EngineField {
   path: string;
+  /** Printed label, for otherFields entries (form fields take the label from the definition). */
+  label?: string;
   /** As printed. null = blank / not found. Never a guess. */
   value: string | boolean | null;
   /** 0..100 after mapping; null = engine gave none. */
@@ -46,7 +56,7 @@ export interface EngineField {
 }
 
 export interface EngineResult {
-  /** Exactly one entry per form field, in form order. */
+  /** One entry per scalar field (form order), then group cells of non-empty rows, then otherFields. */
   fields: EngineField[];
   /** Untouched vendor response; stored as immutable gzip JSON for audit and free re-mapping. */
   raw: unknown;

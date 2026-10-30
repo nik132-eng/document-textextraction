@@ -36,7 +36,10 @@ export class DocumentsController {
 
   @Post()
   @HttpCode(202)
-  @ApiOperation({ summary: 'Upload a document and run one or more engines on it' })
+  @ApiOperation({
+    summary:
+      'Upload any document (PDF, image, Word); auto-detect the form unless formType is given; run engines',
+  })
   @ApiConsumes('multipart/form-data')
   @ApiBody({ schema: UPLOAD_BODY_SCHEMA })
   @UseInterceptors(FileInterceptor('file'))
@@ -126,9 +129,19 @@ export class CatalogController {
   @Get('forms')
   @ApiOperation({ summary: 'Registered form definitions' })
   listForms() {
-    return this.forms
-      .list()
-      .map((f) => ({ id: f.id, version: f.version, title: f.title, fields: f.fields.length }));
+    return this.forms.list().map((f) => ({
+      id: f.id,
+      version: f.version,
+      title: f.title,
+      generic: f.generic ?? false,
+      fields: f.fields.length,
+      groups: (f.groups ?? []).map((g) => ({
+        path: g.path,
+        maxRows: g.maxRows,
+        columns: g.columns.length,
+      })),
+      cues: f.cues?.phrases.length ?? 0,
+    }));
   }
 
   @Get('forms/:id')

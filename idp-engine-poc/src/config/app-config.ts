@@ -21,6 +21,10 @@ export interface AppConfig {
     kmsKeyId?: string;
   };
   upload: { maxBytes: number; rasterDpi: number };
+  /** OCR for classifying pages without a text layer (scans/photos). */
+  classifyOcr: 'none' | 'textract';
+  /** Extra JSON form definitions loaded and validated at boot. */
+  formsDir?: string;
   engines: { enabled: EngineName[]; default: EngineName; defaultMinConfidence: number };
   aws: { region: string; textractMaxAttempts: number };
   vlmrun: {
@@ -72,6 +76,9 @@ export const envSchema = Joi.object({
   MAX_UPLOAD_MB: Joi.number().min(1).max(100).default(25),
   RASTER_DPI: Joi.number().integer().min(100).max(300).default(200),
 
+  CLASSIFY_OCR: Joi.string().valid('none', 'textract').default('none'),
+  FORMS_DIR: optional(),
+
   ENGINES_ENABLED: Joi.string().pattern(engineList).default('fake'),
   ENGINE_DEFAULT: Joi.string()
     .valid(...ENGINE_NAMES)
@@ -109,6 +116,9 @@ export const envSchema = Joi.object({
 })
   .custom((env: Record<string, unknown>) => {
     const list = String(env.ENGINES_ENABLED).split(',');
+    if (env.CLASSIFY_OCR === 'textract' && !list.includes('textract')) {
+      throw new Error('CLASSIFY_OCR=textract requires textract in ENGINES_ENABLED');
+    }
     if (!list.includes(String(env.ENGINE_DEFAULT))) {
       throw new Error('ENGINE_DEFAULT must be one of ENGINES_ENABLED');
     }
@@ -164,6 +174,8 @@ export function loadAppConfig(raw: Record<string, unknown>): AppConfig {
       kmsKeyId: opt('S3_KMS_KEY_ID'),
     },
     upload: { maxBytes: n('MAX_UPLOAD_MB') * 1024 * 1024, rasterDpi: n('RASTER_DPI') },
+    classifyOcr: s('CLASSIFY_OCR') as AppConfig['classifyOcr'],
+    formsDir: opt('FORMS_DIR'),
     engines: {
       enabled: s('ENGINES_ENABLED').split(',') as EngineName[],
       default: s('ENGINE_DEFAULT') as EngineName,

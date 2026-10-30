@@ -1,7 +1,7 @@
 import type { FormDefinition } from '../../forms/form-definition';
-import { getAtPath } from '../../forms/json-schema.builder';
+import type { BBox, EngineField } from '../engine.port';
 import { clamp01 } from '../http';
-import { fieldsInFormOrder, type BBox, type EngineField } from '../engine.port';
+import { walkSchemaResult } from '../schema-result';
 
 /**
  * Meibel deep-transform artifacts -> EngineField[] (pure).
@@ -10,6 +10,8 @@ import { fieldsInFormOrder, type BBox, type EngineField } from '../engine.port';
  * synthetic fixture. Accepted today:
  *   output.json:     { "<root_name>": {...} }  or the object itself
  *   provenance.json: { "<path>": entry | entry[] }  or  { fields: entry[] }  or  entry[]
+ *     path  = 'member.id', 'serviceLines[0].cptHcpcs' or 'serviceLines.0.cptHcpcs',
+ *             'otherFields[2]' / 'otherFields[2].value'; optionally prefixed with root_name
  *     entry = { path?, page | page_number (0-based), bbox, image_size?, page_size?, origin?, confidence? | aeq? }
  *     bbox  = [x0,y0,x1,y1] or {x0,y0,x1,y1} in pixels (top-left, ÷ image_size),
  *             or PDF points with origin "bottom-left" (÷ page_size, y flipped),
@@ -43,51 +45,49 @@ export function mapMeibelArtifacts(
 ): EngineField[] {
   const data = unwrapRoot(output, opts.rootName);
   const prov = indexProvenance(provenance, opts.rootName);
-  const found = new Map<string, EngineField>();
-  for (const field of form.fields) {
-    const raw = getAtPath(data, field.path);
-    if (raw === undefined) continue;
-    const value = toValue(raw);
-    const entry = prov.get(field.path);
-    const page = entry ? (entry.page_number ?? entry.page) : undefined;
-    let confidence: number | null = null;
-    let source: EngineField['confidenceSource'] = 'none';
+  return walkSchemaResult(form, data, (_container, _key, fullPath) => {
+    const entry = prov.get(fullPath) ?? prov.get(`${fullPath}.value`);
     const numeric = entry?.aeq ?? entry?.confidence;
+    let confidence: number | null = null;
+    let confidenceSource: EngineField['confidenceSource'] = 'none';
     if (typeof numeric === 'number') {
       confidence = numeric <= 1 ? numeric * 100 : numeric;
-      source = 'numeric';
+      confidenceSource = 'numeric';
     } else if (opts.defaultFieldConfidence !== undefined) {
       confidence = opts.defaultFieldConfidence;
-      source = 'judged';
+      confidenceSource = 'judged';
     }
-    found.set(field.path, {
-      path: field.path,
-      value,
-      confidence: value === null ? null : confidence,
-      confidenceSource: value === null ? 'none' : source,
+    const page = entry ? (entry.page_number ?? entry.page) : undefined;
+    return {
+      confidence,
+      confidenceSource,
       page: typeof page === 'number' ? page + 1 : null,
       bbox: entry ? toBBox(entry) : null,
-    });
-  }
-  return fieldsInFormOrder(form, found);
+    };
+  });
 }
 
 function unwrapRoot(output: unknown, rootName: string): unknown {
   if (output && typeof output === 'object' && rootName in (output as object)) {
-    const keys = Object.keys(output as object);
-    if (keys.length === 1) return (output as Record<string, unknown>)[rootName];
+    if (Object.keys(output as object).length === 1)
+      return (output as Record<string, unknown>)[rootName];
   }
   return output;
 }
 
+/** Index by canonical bracket path: 'a.0.b' -> 'a[0].b'; root prefix stripped. */
 function indexProvenance(provenance: unknown, rootName: string): Map<string, ProvEntry> {
   const out = new Map<string, ProvEntry>();
-  const strip = (p: string) => (p.startsWith(`${rootName}.`) ? p.slice(rootName.length + 1) : p);
+  const canon = (p: string) =>
+    (p.startsWith(`${rootName}.`) ? p.slice(rootName.length + 1) : p).replace(
+      /\.(\d+)(?=\.|$)/g,
+      '[$1]',
+    );
   const add = (path: string | undefined, e: unknown) => {
     const entry = (Array.isArray(e) ? e[0] : e) as ProvEntry | undefined;
     const key = path ?? entry?.path ?? entry?.field;
-    if (key && entry && typeof entry === 'object' && !out.has(strip(key)))
-      out.set(strip(key), entry);
+    if (key && entry && typeof entry === 'object' && !out.has(canon(key)))
+      out.set(canon(key), entry);
   };
   if (Array.isArray(provenance)) provenance.forEach((e) => add(undefined, e));
   else if (provenance && typeof provenance === 'object') {
@@ -96,14 +96,6 @@ function indexProvenance(provenance: unknown, rootName: string): Map<string, Pro
     else Object.entries(p).forEach(([k, v]) => add(k, v));
   }
   return out;
-}
-
-function toValue(raw: unknown): string | boolean | null {
-  if (raw === null) return null;
-  if (typeof raw === 'boolean') return raw;
-  if (typeof raw === 'number') return String(raw);
-  if (typeof raw === 'string') return raw.trim() === '' ? null : raw.trim();
-  return null;
 }
 
 export function toBBox(e: ProvEntry): BBox | null {

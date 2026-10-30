@@ -1,8 +1,9 @@
 import { gzipSync } from 'node:zlib';
 import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { APP_CONFIG, type AppConfig } from '../config/app-config';
-import { EngineError, type EngineResult } from '../engines/engine.port';
+import { EngineError, type EngineField, type EngineResult } from '../engines/engine.port';
 import { EngineRegistry } from '../engines/engine-registry';
+import { resolvePath, type FormDefinition } from '../forms/form-definition';
 import { FormRegistry } from '../forms/form-registry';
 import { buildJsonSchema } from '../forms/json-schema.builder';
 import type { Prisma } from '../generated/prisma/client';
@@ -44,20 +45,21 @@ export class ExtractionRunner {
       },
     });
     const started = Date.now();
+    const doc = ex.document;
     const log = {
       extractionId: ex.id,
       documentId: ex.documentId,
       engine: ex.engine,
       formType: ex.formType,
     };
-    this.logger.log({ msg: 'extraction.started', ...log, pages: ex.document.pageCount });
+    this.logger.log({ msg: 'extraction.started', ...log, pages: doc.pageCount });
 
     try {
       const form = this.forms.get(ex.formType);
       const { schema } = buildJsonSchema(form);
-      const [original, ...pageBytes] = await Promise.all([
-        this.storage.get(ex.document.storageKey),
-        ...ex.document.pages.map((p) => this.storage.get(p.storageKey)),
+      const [normalized, ...pageBytes] = await Promise.all([
+        this.storage.get(doc.normalizedKey ?? doc.storageKey),
+        ...doc.pages.map((p) => this.storage.get(p.storageKey)),
       ]);
       const result: EngineResult = await this.engines.get(ex.engine).extract({
         tenantId: ex.tenantId,
@@ -65,47 +67,18 @@ export class ExtractionRunner {
         form,
         schema,
         document: {
-          bytes: original!,
-          mimeType: ex.document.mimeType,
-          pageCount: ex.document.pageCount,
+          bytes: normalized!,
+          mimeType: doc.normalizedMimeType ?? doc.mimeType,
+          pageCount: doc.pageCount,
         },
-        pages: ex.document.pages.map((p, i) => ({
-          pageNumber: p.pageNumber,
-          bytes: pageBytes[i]!,
-        })),
+        pages: doc.pages.map((p, i) => ({ pageNumber: p.pageNumber, bytes: pageBytes[i]! })),
       });
 
       const rawKey = storageKeys.raw(ex.tenantId, ex.documentId, ex.engine, ex.id);
       await this.storage.put(rawKey, gzipSync(JSON.stringify(result.raw)), 'application/gzip');
 
-      const byPath = new Map(result.fields.map((f) => [f.path, f]));
-      let needsReview = false;
-      const rows: Prisma.ExtractedFieldCreateManyInput[] = form.fields.map((def) => {
-        const f = byPath.get(def.path)!;
-        const flags = flagsFor(
-          def,
-          f,
-          thresholdFor(form, def, this.cfg.engines.defaultMinConfidence),
-          result.warnings,
-        );
-        if (flags.length) needsReview = true;
-        return {
-          tenantId: ex.tenantId,
-          extractionId: ex.id,
-          path: def.path,
-          label: def.label,
-          canonicalKey: def.canonicalKey ?? null,
-          valueType: def.type,
-          value: f.value === null ? undefined : f.value,
-          confidence: f.confidence,
-          confidenceSource: f.confidenceSource,
-          page: f.page,
-          bbox: f.bbox ? { ...f.bbox } : undefined,
-          groundingText: f.groundingText ?? null,
-          flags,
-        };
-      });
-
+      const rows = toRows(form, result, ex.tenantId, ex.id, this.cfg.engines.defaultMinConfidence);
+      const needsReview = rows.some((r) => (r.flags as string[]).length > 0);
       const latencyMs = Date.now() - started;
       await this.prisma.$transaction([
         this.prisma.extractedField.deleteMany({ where: { extractionId: ex.id } }),
@@ -130,6 +103,8 @@ export class ExtractionRunner {
         ...log,
         latencyMs,
         fields: rows.length,
+        groupCells: rows.filter((r) => r.source === 'group').length,
+        other: rows.filter((r) => r.source === 'other').length,
         flagged: rows.filter((r) => (r.flags as string[]).length).length,
       });
     } catch (e) {
@@ -152,4 +127,47 @@ export class ExtractionRunner {
       throw e;
     }
   }
+}
+
+/** EngineResult -> EAV rows. Unknown paths from an engine are dropped (never stored unvalidated). */
+export function toRows(
+  form: FormDefinition,
+  result: EngineResult,
+  tenantId: string,
+  extractionId: string,
+  envMinConfidence: number,
+): Prisma.ExtractedFieldCreateManyInput[] {
+  const rows: Prisma.ExtractedFieldCreateManyInput[] = [];
+  const seen = new Set<string>();
+  for (const f of result.fields) {
+    if (seen.has(f.path)) continue;
+    const ref = resolvePath(form, f.path);
+    if (!ref) continue;
+    seen.add(f.path);
+    const def = ref.kind === 'field' ? ref.def : ref.kind === 'group' ? ref.column : null;
+    rows.push({
+      tenantId,
+      extractionId,
+      path: f.path,
+      label: def?.label ?? (f.label ?? 'Unlabelled').slice(0, 300),
+      source: ref.kind,
+      groupPath: ref.kind === 'group' ? ref.group.path : null,
+      rowIndex: ref.kind === 'group' ? ref.row : ref.kind === 'other' ? ref.index : null,
+      canonicalKey: def?.canonicalKey ?? null,
+      valueType: def?.type ?? (typeof f.value === 'boolean' ? 'checkbox' : 'text'),
+      value: f.value === null ? undefined : f.value,
+      confidence: f.confidence,
+      confidenceSource: f.confidenceSource,
+      page: f.page,
+      bbox: f.bbox ? { ...f.bbox } : undefined,
+      groundingText: f.groundingText ?? null,
+      flags: flagsFor(
+        def,
+        f as EngineField,
+        thresholdFor(form, ref, envMinConfidence),
+        result.warnings,
+      ),
+    });
+  }
+  return rows;
 }

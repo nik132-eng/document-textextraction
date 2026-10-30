@@ -1,8 +1,10 @@
 # IDP engine POC
 
-One document-extraction pipeline with **swappable engines**: Amazon Textract, VLM Run, Meibel, plus a `fake` engine that needs no credentials. You pick the engine with env vars, and you can run several on the same file and compare them field by field.
+Upload **any document** (PDF, scan, photo, Word). The service works out **which form it is** (CMS-1500, UB-04, hospital booking sheet, insurance card, intake, or anything else), extracts **every value**, and returns it in the form's own shape, with confidence, page location and review flags.
 
-It is a proof of concept for decision **D14 (multi-engine)** from the plan repo `document-textextraction` (`docs/research/vendors/shared-engine-adapter.md`), built on the stack of the main project (Node 22, NestJS 11, Prisma 7.4, Joi, Vitest, Pino, BullMQ).
+The extraction engine can be swapped: Amazon Textract, VLM Run, Meibel, or a `fake` engine that needs no credentials. You choose with env vars, and you can run several engines on the same file and compare them field by field.
+
+It is a proof of concept for decision **D14 (multi-engine)** from the plan repo (`docs/research/vendors/shared-engine-adapter.md`), built on the main project's stack: Node 22, NestJS 11, Prisma 7.4, Joi, Zod (form DSL), Vitest, Pino, BullMQ.
 
 > **Synthetic documents only** until the compliance gates in [docs/MANUAL-SETUP.md](docs/MANUAL-SETUP.md) §5 are done. With `PHI_MODE=true` the app refuses to boot unless they are.
 
@@ -11,168 +13,189 @@ It is a proof of concept for decision **D14 (multi-engine)** from the plan repo 
 ## 1. What happens under the hood
 
 ```
-POST /v1/documents (file + formType + engines?)
-  │  magic-byte check · sha256 dedupe per tenant
+POST /v1/documents (file, formType?, engines?)
+  │  type from magic bytes + ZIP contents (never the file name) · sha256 dedupe per tenant
   ▼
-Storage (local | S3+KMS) ── original + one PNG per page (pdfjs-dist + @napi-rs/canvas, sharp)
+CONVERT    pdf / png / jpg / tiff ─ as is
+           docx ─ pure-JS text PDF (paragraphs + tables + checkboxes; no system dependency)
+           anything else (doc, odt, rtf, txt, ...) ─ 415
   ▼
-Extraction row per engine ── requestHash = engine|form|version|schemaHash|file sha256
-  │                            same hash already done or running? → reuse it, no second vendor bill
+RASTERIZE  one PNG per page (pdfjs-dist + @napi-rs/canvas, sharp) + the page's PDF text layer
   ▼
-Dispatcher ── PIPELINE_MODE=sync: run in the request
-  │           PIPELINE_MODE=queue: BullMQ job on Redis, worker process runs it (3 tries, backoff)
+CLASSIFY   formType given? → use it. Else cue phrases scored on the page text
+           (scans: optional Textract OCR, max 3 pages) → best form ≥ its minScore, otherwise GENERIC
   ▼
-ExtractionEngine.extract(request)   ◀── THE SEAM (src/engines/engine.port.ts)
-  │   textract : page PNG → AnalyzeDocument(QUERIES [+FORMS]) per page → blocks
-  │   vlmrun   : upload file → document/generate(json_schema, grounding, confidence) → poll → delete file
-  │   meibel   : deep-transform(file, json_schema, guidance) → poll → output.json + provenance.json
-  │   fake     : deterministic synthetic values
+EXTRACT    one Extraction per engine · requestHash reuse (no double billing) · sync or BullMQ queue
+           ExtractionEngine.extract(request)   ◀── THE SEAM (src/engines/engine.port.ts)
+             textract : FORMS key match (box captions) + TABLES (line items) + Queries (batches of 15)
+             vlmrun   : upload → document/generate(JSON Schema, grounding, confidence) → poll → delete
+             meibel   : deep-transform(JSON Schema, guidance) → poll → output.json + provenance.json
+             fake     : synthetic values, same shape
   ▼
-EngineField[]  { path, value, confidence 0..100, confidenceSource, page, bbox (0..1, top-left) }
+EngineField[]  scalars        patient.dob
+               group cells    serviceLines[0].cptHcpcs   (CMS-1500 Box 24, UB-04 FL42-48, procedures)
+               other values   otherFields[3] + printed label   ("capture any value")
   ▼
-Raw vendor response → storage (gzip, immutable)  →  review flags (same rules for every engine)
-  │   low_confidence · not_found · ungrounded (value with no page/bbox) · engine_fallback
+raw response → storage (gzip, immutable) · review flags (same rules for every engine):
+  low_confidence · not_found · ungrounded · engine_fallback · unmapped
   ▼
-ExtractedField rows (EAV + provenance)  →  GET /v1/extractions/:id · GET /v1/documents/:id/compare
+ExtractedField rows (EAV + provenance) → GET /v1/extractions/:id  { fields, groups, other, values }
 ```
 
-**The form definition is the only input that describes a form** (`src/forms/definitions.ts`, pure data). The engines use it in two ways:
+## 2. Forms
 
-- **Textract** (evidence-first): each field becomes a Textract *Query* whose alias is the field path. Checkbox fields use FORMS key/value selection marks.
-- **VLM Run / Meibel** (schema-first): the definition becomes a JSON Schema (`json-schema.builder.ts`). Every key is required and nullable, text is returned *as printed*, and the prompt carries labels only, never example values.
+| Form | Detected by | Header fields | Rows (groups) |
+|---|---|---|---|
+| `CMS1500` | "HEALTH INSURANCE CLAIM FORM", NUCC, box captions | 41 (boxes 1–33, Box 21 A–L) | `serviceLines` Box 24, max 6 × 10 columns |
+| `UB04` | "UB-04", NUBC, TYPE OF BILL, REV. CD. … | 35 (FL1–FL76) | `revenueLines` FL42–48, max 22 × 7 columns |
+| `BOOKING_SHEET` | BOOKING, SURGERY, SURGEON, ANESTHESIA, CPT … | 25 (patient, surgeon, date/time, anesthesia, insurance, auth, allergies…) | `procedures` CPT / description / side / modifier |
+| `INSURANCE_CARD` | MEMBER ID, RXBIN, COPAY … | 10 | — |
+| `PATIENT_INTAKE` | PATIENT REGISTRATION, EMERGENCY CONTACT … | 13 | — |
+| `GENERIC` | fallback | none: every labelled value goes to `otherFields` | — |
+| *yours* | your cue phrases | a JSON file in `FORMS_DIR` | yes |
 
-All engines end in the same `EngineField[]`, so storage, review flags, the API and the comparison never see vendor details.
+**"Any value":** every form (not only GENERIC) also captures printed label/value pairs that the definition doesn't cover, as `otherFields` (flagged `unmapped`, no canonical key). Turn it off per form with `"captureOther": false`.
 
-## 2. What can be swapped, and how
+**Add a form without code:** drop a JSON file into `FORMS_DIR` (example: [test/fixtures/forms/referral.json](test/fixtures/forms/referral.json)). It is validated with Zod at boot, and a bad file stops the app with the file name and the reason. A JSON form with the same `id` as a built-in one replaces it, which is how you add a hospital's own booking-sheet layout.
+
+```json
+{ "id": "REFERRAL", "version": 1, "title": "Referral letter", "description": "...",
+  "cues": { "phrases": ["REFERRAL", "REFERRING PHYSICIAN", "REASON FOR REFERRAL"], "minScore": 0.6 },
+  "fields": [ { "path": "patient.name", "label": "Patient name", "type": "name",
+                "canonicalKey": "patient.name.full", "keyAliases": ["PATIENT NAME"], "required": true } ],
+  "groups": [ { "path": "items", "label": "Items", "maxRows": 10,
+                "columns": [ { "path": "code", "label": "Code", "type": "code", "keyAliases": ["CODE"] } ] } ] }
+```
+
+Field keys:
+
+| Key | Meaning |
+|---|---|
+| `path` | where the value lands in the output |
+| `label` | the printed caption |
+| `type` | `text`, `name`, `date`, `code`, `phone`, `money`, `number` or `checkbox` |
+| `canonicalKey` | the plan-03 dictionary key used for autofill |
+| `keyAliases` | printed captions (scalars) or column headers (groups) that Textract matches |
+| `query` | forces a Textract Query |
+| `required` | flags `not_found` when the value is blank |
+| `minConfidence` | per-field review threshold |
+
+## 3. What can be swapped, and how
 
 | Seam | Interface | Adapters | How to switch |
 |---|---|---|---|
-| **Extraction engine** | `ExtractionEngine` (`src/engines/engine.port.ts`) | `textract`, `vlmrun`, `meibel`, `fake` | `ENGINES_ENABLED`, `ENGINE_DEFAULT`, or per request `engines=textract,vlmrun` |
-| Object storage | `StoragePort` (`src/storage/storage.ts`) | `LocalStorage`, `S3Storage` (SSE-KMS) | `STORAGE_DRIVER=local\|s3` |
-| Execution | `ExtractionDispatcher` | inline, BullMQ | `PIPELINE_MODE=sync\|queue`, `APP_ROLE=api\|worker\|all` |
-| Tenant / auth | `@TenantId()` decorator | `x-tenant-id` header (dev) | In the host: an adapter over the host's guard |
-| Forms | `FormDefinition` (data) | `INSURANCE_CARD`, `PATIENT_INTAKE` | Add a definition, no code |
+| **Extraction engine** | `ExtractionEngine` (`src/engines/engine.port.ts`) | `textract`, `vlmrun`, `meibel`, `fake` | `ENGINES_ENABLED`, `ENGINE_DEFAULT`, per request `engines=textract,vlmrun` |
+| Document conversion | `ConverterService` | none, DOCX text-PDF | automatic by file type |
+| Classification text | PDF text layer, Textract OCR | — | `CLASSIFY_OCR=none\|textract` |
+| Forms | `FormDefinition` (data, Zod-validated) | built-in TS + JSON files | `FORMS_DIR` |
+| Object storage | `StoragePort` | local, S3 (SSE-KMS) | `STORAGE_DRIVER` |
+| Execution | `ExtractionDispatcher` | inline, BullMQ | `PIPELINE_MODE`, `APP_ROLE` |
+| Tenant / auth | `@TenantId()` | `x-tenant-id` (dev) | host guard adapter |
 
-**Adding a fifth engine** (e.g. Bedrock Data Automation, Azure Document Intelligence):
-1. `src/engines/<name>/<name>.engine.ts` implements `extract(req) → EngineResult`. Keep transport in a `<name>.client.ts` and response mapping in a pure `<name>.mapper.ts`.
-2. Add the name to `ENGINE_NAMES` (`engine.port.ts`) and a `case` in `buildEngines` (`engines.module.ts`).
-3. Add its env vars and the "enabled ⇒ key required" rule in `src/config/app-config.ts`.
-4. Write mapper tests on a recorded **synthetic** response.
+Schema engines (VLM Run, Meibel, fake) share one walker (`src/engines/schema-result.ts`) for scalars, rows and other values. Each adapter only supplies its provenance lookup. **A fifth engine** means:
+1. `src/engines/<name>/` with a transport client and a pure mapper.
+2. A `case` in `buildEngines`.
+3. Its env vars and rules in `app-config.ts`.
 
-Nothing else changes: no pipeline, API, schema or review code.
-
-## 3. Quick start
+## 4. Quick start
 
 Requirements: Node 22.21.1 (`nvm use`), pnpm 9, and Docker Desktop **running**.
 
 ```bash
-pnpm install                     # also runs `prisma generate`
-cp .env.example .env             # works as is: fake engine only
-docker compose up -d             # postgres:15 on :5433, redis:7 on :6380
-pnpm prisma:deploy               # applies prisma/migrations
-pnpm start:dev                   # http://localhost:3000/docs (Swagger)
+pnpm install                     # also runs prisma generate
+cp .env.example .env             # works as is: fake engine, auto classification, DOCX supported
+docker compose up -d             # postgres:15 :5433, redis:7 :6380
+pnpm prisma:deploy
+pnpm start:dev                   # http://localhost:3000/docs
 
-pnpm samples                     # writes samples/*.synthetic.{png,pdf}
-curl -s -X POST localhost:3000/v1/documents -H 'x-tenant-id: demo' \
-  -F formType=INSURANCE_CARD -F file=@samples/insurance-card.synthetic.png
-curl -s localhost:3000/v1/extractions/<extractionId> -H 'x-tenant-id: demo'
+pnpm samples                     # samples/: cms1500, ub04, booking-sheet (.pdf + .docx), intake, letter, card
+curl -s -X POST localhost:3000/v1/documents -H 'x-tenant-id: demo' -F file=@samples/booking-sheet.synthetic.docx
+#   → { formType: "BOOKING_SHEET", classification: { source: "classifier", score: 1 }, conversion: "docx-text", extractions: [...] }
+curl -s localhost:3000/v1/extractions/<id> -H 'x-tenant-id: demo'
+#   → { fields: [...], groups: { procedures: [[...], [...]] }, other: [...], values: { patient: {...}, procedures: [...] } }
 ```
 
-**Turn on real engines:** fill the matching block in `.env` (see [docs/MANUAL-SETUP.md](docs/MANUAL-SETUP.md) for how to get each credential), then for example:
+**Real engines:** fill the matching `.env` block (see [docs/MANUAL-SETUP.md](docs/MANUAL-SETUP.md)), then set `ENGINES_ENABLED=fake,textract,vlmrun,meibel`. **Bake-off on one file:** upload with `-F engines=textract,vlmrun,meibel`, then call `GET /v1/documents/<id>/compare`. **Queue mode:** `PIPELINE_MODE=queue`, running `APP_ROLE=api` plus N × `APP_ROLE=worker` from the same image.
 
-```bash
-ENGINES_ENABLED=fake,textract,vlmrun,meibel
-ENGINE_DEFAULT=textract
-```
+## 5. API
 
-Boot fails with a clear message if an enabled engine is missing its key or region.
-
-**Bake-off on one file:**
-
-```bash
-curl -s -X POST localhost:3000/v1/documents -H 'x-tenant-id: demo' \
-  -F formType=INSURANCE_CARD -F engines=textract,vlmrun,meibel \
-  -F file=@samples/insurance-card.synthetic.png
-curl -s localhost:3000/v1/documents/<documentId>/compare -H 'x-tenant-id: demo'
-```
-
-**Queue mode:** set `PIPELINE_MODE=queue`. `APP_ROLE=all` serves HTTP and consumes jobs. In production, run one container with `APP_ROLE=api` and N containers with `APP_ROLE=worker`, all from the same image.
-
-## 4. API
-
-All `/v1/*` routes except the catalog need the `x-tenant-id` header.
+All `/v1/*` routes except the catalog need `x-tenant-id`.
 
 | Method | Path | What |
 |---|---|---|
-| POST | `/v1/documents` | multipart `file`, `formType`, optional `engines` (comma list). Returns 202 with `documentId` and one extraction per engine. A re-upload of the same file is deduplicated, and an identical run is reused |
-| GET | `/v1/documents/:id` | document + every extraction run (status, cost, latency) |
-| POST | `/v1/documents/:id/extractions` | `{ engine, formType? }`: run another engine on a stored document |
-| GET | `/v1/documents/:id/compare` | latest successful run per engine, field by field, with `agree` per row and totals (filled, flagged, cost, latency) |
-| GET | `/v1/documents/:id/pages/:n` | page PNG (for the review overlay; bboxes are 0..1 of this image) |
-| GET | `/v1/extractions/:id` | fields: value, confidence, page, bbox, canonicalKey, flags |
-| GET | `/v1/engines` | which engines exist and which are enabled |
-| GET | `/v1/forms`, `/v1/forms/:id` | definitions and the JSON Schema sent to schema engines |
-| GET | `/health` | DB check (terminus) |
-| GET | `/docs` | Swagger UI |
+| POST | `/v1/documents` | multipart `file`, optional `formType` (otherwise auto-detected), optional `engines`. Returns 202 with `documentId`, `formType`, `classification`, `conversion` and the extractions |
+| GET | `/v1/documents/:id` | document, classification, conversion, every run (status, cost, latency) |
+| POST | `/v1/documents/:id/extractions` | `{ engine, formType? }`: another engine, or re-extract as a different form |
+| GET | `/v1/documents/:id/compare` | latest run per engine side by side, including rows and other values (matched by label) |
+| GET | `/v1/documents/:id/pages/:n` | page PNG (bboxes are 0..1 of this image) |
+| GET | `/v1/extractions/:id` | `fields` (scalars), `groups` (rows of cells), `other` (any other value), `values` (the form's JSON shape, ready for prefill) |
+| GET | `/v1/engines` · `/v1/forms` · `/v1/forms/:id` | catalog; `/forms/:id` includes the JSON Schema sent to schema engines |
+| GET | `/health` · `/docs` | DB health · Swagger |
 
-## 5. Tests
+## 6. Tests
 
 ```bash
-pnpm test        # 43 unit tests, no network, no DB
-pnpm test:e2e    # 6 e2e tests over HTTP on real Postgres with the fake engine (docker compose up -d first)
+pnpm test        # 69 unit tests: no network, no DB
+pnpm test:e2e    # 10 e2e tests over HTTP on real Postgres with the fake engine
 pnpm lint && pnpm typecheck
 ```
 
-What the unit tests pin down:
-- **VLM Run:** `allow_logging/training/retention=false` on every request, bearer auth, 429 retry with `Retry-After`, the remote file is deleted even on failure, and error bodies are never copied into errors (they can echo PHI).
-- **Meibel:** the `Meibel-API-Key` header, multipart fields, a URL allowlist (no datasources/ingest/agents), pixel and PDF-point bbox conversion, and guidance without digits.
-- **Textract (aws-sdk-client-mock):** one call per page, queries aliased by path, FORMS only when there are checkboxes, throttling marked retryable.
-- **All engines:** review flags, JSON Schema shape and hash stability, boot validation and the PHI gates, and PDF/TIFF/PNG rasterization.
+What they cover:
+- **Conversion:** zip reader, DOCX → lines (paragraphs, tables, checkboxes, entities), text → PDF (wrap, pages, WinAnsi), magic bytes (accepted and rejected formats).
+- **Classification:** all 5 forms plus the GENERIC fallback, on raw text and on rendered PDFs.
+- **Textract (hand-built block graphs):** CMS-1500 box captions with one key per field, Box 24 and UB-04 tables, blank rows dropped, checkbox selection, unclaimed keys → otherFields, query batching, cost.
+- **VLM Run / Meibel:** privacy flags, auth headers, retries, rows with per-row metadata, the row cap, otherFields, bbox conversions.
+- **Forms:** Zod validation, FORMS_DIR loading and rejection, JSON Schema arrays, no example values in prompts, hash stability.
+- **e2e:** CMS-1500/UB-04 PDF and Word booking sheet auto-detected end to end, GENERIC, a JSON form, dedupe and reuse, compare, tenant isolation, 400/404/415 cases.
 
-## 6. Layout
+## 7. Layout
 
 ```
 src/
-  main.ts · app.module.ts · core.module.ts · health.controller.ts
-  config/app-config.ts          Joi env schema + typed AppConfig + PHI boot gates
-  common/                       util (hash, magic bytes), pino logger, tenant decorator
-  prisma/prisma.service.ts      Prisma 7 client via @prisma/adapter-pg
-  storage/storage.ts            StoragePort + local + S3
-  rasterizer/                   PDF/TIFF/image → page PNGs
-  forms/                        form DSL (data), definitions, registry, JSON Schema builder
-  engines/
-    engine.port.ts              THE SEAM: ExtractionEngine, EngineField, EngineError
-    engines.module.ts           env → adapters (the only place that knows them all)
-    http.ts                     fetch + timeout + retry + poll (vendor adapters)
-    textract/ vlmrun/ meibel/ fake/
-  extraction/                   runner, dispatcher (sync | BullMQ), review flags
-  documents/                    controllers, DTOs, documents + compare services
-  testing/                      synthetic document generators (+ `pnpm samples`)
-prisma/schema.prisma            Document, Page, Extraction, ExtractedField
-test/app.e2e-spec.ts
+  conversion/      zip reader, docx-text, text-pdf, ConverterService (DOCX → text PDF)
+  rasterizer/      PDF/TIFF/image → page PNG + page text
+  forms/           DSL (Zod), definitions/ (cms1500, ub04, booking-sheet, simple), registry (+FORMS_DIR),
+                   classifier, JSON Schema builder
+  engines/         engine.port (THE SEAM), schema-result walker, http, engines.module, registry,
+                   textract/ vlmrun/ meibel/ fake/
+  extraction/      runner (rows + flags), dispatcher (sync | BullMQ), review flags
+  documents/       controllers, DTOs, documents + compare services
+  testing/         synthetic CMS-1500 / UB-04 / booking (PDF + DOCX) / card generators, zip writer
+prisma/            schema + 2 migrations (init, any_file_any_form)
+test/              e2e + fixtures/forms/referral.json
 ```
 
-## 7. Versions, and where they differ from the requested stack
+## 8. Versions
 
-Pinned as requested: Node ≥22 (`.nvmrc` 22.21.1, image `node:22.21.1-alpine`), pnpm 9, TS 5.7.3, Nest 11.0.1 / CLI 11.0.0, config 4.0.2, swagger 11.2.3, terminus 11.0.0, testing 11.0.1, Express 5.2.1 (pnpm override), Prisma 7.4.1 + adapter-pg + `prisma.config.ts`, pg 8.16.3, Joi 18.0.2, class-validator 0.14.3, class-transformer 0.5.1, Vitest 3.2.4, supertest 7.0.0, ESLint 9.18.0, typescript-eslint 8.20.0, Prettier 3.4.2, Pino 10.1.0, AWS SDK 3.958.0 (S3, Textract), rxjs 7.8.1.
+These are pinned as requested:
 
-Added, with reasons:
+| Area | Packages |
+|---|---|
+| Runtime and language | Node ≥22 (`node:22.21.1-alpine`), pnpm 9, TypeScript 5.7.3 |
+| NestJS | Nest 11.0.1, CLI 11.0.0, config 4.0.2, swagger 11.2.3, terminus 11.0.0, testing 11.0.1, Express 5.2.1 |
+| Database | Prisma 7.4.1 with adapter-pg and `prisma.config.ts`, pg 8.16.3 |
+| Validation | Joi 18.0.2 (env), class-validator 0.14.3 / class-transformer 0.5.1 (HTTP DTOs), **Zod 4.3.6 (form DSL only)** |
+| Tooling | Vitest 3.2.4, supertest 7.0.0, ESLint 9.18.0, typescript-eslint 8.20.0, Prettier 3.4.2, Pino 10.1.0 |
+| AWS and other | AWS SDK 3.958.0 (S3, Textract), rxjs 7.8.1 |
+
+These were added:
 
 | Package | Version | Why |
 |---|---|---|
-| `bullmq` | 5.81.5 | Queue. Latest is 6.x (new multi-backend peers); 5.x is the stable API |
-| `pdfjs-dist` | 5.7.284 | PDF → PNG without poppler (6.x is a fresh major) |
-| `@napi-rs/canvas` | 0.1.100 | Must be the **same** version pdfjs-dist 5.7 depends on. A second copy breaks `Path2D` |
-| `sharp` | 0.34.5 | Images, TIFF pages, resize under the Textract limits |
-| `aws-sdk-client-mock` | 4.1.0 (dev) | Textract tests without AWS |
-| `unplugin-swc`, `@swc/core` | 2.0.0, 1.16.20 (dev) | Vitest needs SWC to emit decorator metadata for Nest DI |
-| `@eslint/js` | 9.18.0 (dev) | ESLint 9 flat config base |
-| `reflect-metadata` | 0.2.2 | Nest peer |
+| `bullmq` | 5.81.5 | Stable 5.x API (6.x is a fresh major) |
+| `pdfjs-dist` | 5.7.284 | PDF render and text layer without poppler |
+| `@napi-rs/canvas` | 0.1.100 | Must match pdfjs-dist's own copy, or `Path2D` breaks |
+| `sharp` | 0.34.5 | Image handling |
+| `aws-sdk-client-mock`, `unplugin-swc`, `@swc/core`, `@eslint/js` | — | Dev only |
 
-Not used: `uuid` (`crypto.randomUUID` is enough, and uuid 13 is ESM-only), Cognito/SES/Secrets SDKs (not needed in the POC; see MANUAL-SETUP §5 for Secrets Manager), Zod (kept for the later form DSL). Not added: Nest 12, Node 24, Prisma ≥7.10, Jest, poppler, or extra secrets.
+Word support uses no extra npm package and no system dependency: there is a built-in zip reader and PDF writer.
 
-## 8. Not in the POC yet (the plan has them)
+Not added: Nest 12, Node 24, Prisma ≥7.10, Jest, poppler, extra IDP secrets.
 
-Page classification and packet splitting (P5), repeating groups such as CMS-1500 Box 24 (P4), value normalizers and rules (P3/P4), M1 overlay and second-opinion candidates (V5), VLM Run webhooks (V8), field review PATCH / autofill / outbox events (P7), Postgres RLS / retention / audit (P9), the eval script over a golden set (P4/S7).
+## 9. Limits of the POC (the plan has them)
 
-**Vendor response shapes are UNVERIFIED** (the research could not call the APIs). Each guess lives in exactly one file, with a header comment listing the shapes it accepts: `src/engines/vlmrun/vlmrun.mapper.ts` (`_metadata` placement, bbox format, page base) and `src/engines/meibel/meibel.mapper.ts` (`provenance.json`). The first real synthetic run tells you which shape is right. See MANUAL-SETUP §4.
+- **One form per upload.** Splitting a mixed packet page by page (plan P5) is not built; the whole file is classified once. Upload claims one at a time, or pass `formType`.
+- **Word = DOCX only, and layout is not kept.** Labels, values and tables survive; positions don't, so bboxes refer to the generated PDF. `.doc`, `.odt` and `.rtf` are rejected: save them as DOCX or PDF.
+- **Textract on CMS-1500 Box 24 depends on TABLES detection.** The plan's `grid` resolver (fixed row geometry) is the fallback to add if accuracy is low. VLM Run's per-row schema output usually fits that box better; measure with `/compare`.
+- **Not yet built:** value normalization and rules (dates, NPI and ICD checks; plan P3/P4), M1 overlay, review PATCH, autofill, outbox (P7), RLS, retention, eval script (P9/S7).
+- **Vendor response shapes are still UNVERIFIED.** Each guess lives in one mapper file (`vlmrun.mapper.ts`, `meibel.mapper.ts`). See MANUAL-SETUP §4.

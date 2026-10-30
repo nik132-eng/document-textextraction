@@ -1,4 +1,14 @@
-import type { FormDefinition } from './form-definition';
+import type { FormDefinition } from '../form-definition';
+
+/** Unknown documents: no fixed fields, every labelled value is captured as otherFields. */
+export const GENERIC: FormDefinition = {
+  id: 'GENERIC',
+  version: 1,
+  title: 'Generic document',
+  description: 'Any document that matched no registered form. Captures every labelled value.',
+  generic: true,
+  fields: [],
+};
 
 /** Front of a US health-insurance member card. */
 export const INSURANCE_CARD: FormDefinition = {
@@ -6,6 +16,10 @@ export const INSURANCE_CARD: FormDefinition = {
   version: 1,
   title: 'Insurance card',
   description: 'Front of a health-insurance member ID card',
+  cues: {
+    phrases: ['MEMBER ID', 'GROUP', 'RXBIN', 'RXPCN', 'COPAY', 'PAYER ID', 'CUSTOMER SERVICE'],
+    minScore: 0.5,
+  },
   defaults: { minConfidence: 80 },
   fields: [
     {
@@ -20,7 +34,7 @@ export const INSURANCE_CARD: FormDefinition = {
       path: 'member.name',
       label: 'Member name',
       type: 'name',
-      canonicalKey: 'insured.name.first',
+      canonicalKey: 'insured.name.full',
       query: 'What is the member name?',
       required: true,
     },
@@ -75,6 +89,17 @@ export const PATIENT_INTAKE: FormDefinition = {
   version: 1,
   title: 'Patient intake (demographics)',
   description: 'Patient registration / intake form, demographics section',
+  cues: {
+    phrases: [
+      'PATIENT REGISTRATION',
+      'INTAKE',
+      'EMERGENCY CONTACT',
+      'DATE OF BIRTH',
+      'PRIMARY INSURANCE',
+      'SUBSCRIBER',
+    ],
+    minScore: 0.5,
+  },
   defaults: { minConfidence: 80 },
   fields: [
     {
@@ -147,5 +172,3 @@ export const PATIENT_INTAKE: FormDefinition = {
     },
   ],
 };
-
-export const FORM_DEFINITIONS: FormDefinition[] = [INSURANCE_CARD, PATIENT_INTAKE];

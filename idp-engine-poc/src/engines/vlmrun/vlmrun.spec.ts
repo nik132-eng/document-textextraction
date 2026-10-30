@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { INSURANCE_CARD, PATIENT_INTAKE } from '../../forms/definitions';
+import { CMS1500, INSURANCE_CARD, PATIENT_INTAKE } from '../../forms/definitions';
 import { buildJsonSchema } from '../../forms/json-schema.builder';
 import type { EngineRequest } from '../engine.port';
 import type { FetchFn } from '../http';
@@ -203,5 +203,48 @@ describe('VlmRunEngine', () => {
         ([u, i]) => String(u).endsWith('/v1/files/file-1') && i?.method === 'DELETE',
       ),
     ).toBe(true);
+  });
+});
+
+describe('mapVlmRunResponse: groups and otherFields', () => {
+  it('maps CMS-1500 service lines with per-row metadata, drops blank rows, caps at maxRows, keeps otherFields', () => {
+    const row = (cpt: string | null) => ({
+      dateFrom: cpt ? '01 05 26' : null,
+      cptHcpcs: cpt,
+      cptHcpcs_metadata: {
+        confidence: 'high',
+        bboxes: [{ xywh: [0.3, 0.6, 0.05, 0.01], page: 0 }],
+      },
+    });
+    const response = {
+      insured: { id: 'ZZX1' },
+      serviceLines: [
+        row('99213'),
+        row(null),
+        row('36415'),
+        ...Array.from({ length: 6 }, () => row('99999')),
+      ],
+      otherFields: [
+        {
+          label: 'SIGNED',
+          value: 'SIGNATURE ON FILE',
+          value_metadata: { confidence: 'low', bboxes: [{ xywh: [0.1, 0.9, 0.2, 0.02], page: 0 }] },
+        },
+      ],
+    };
+    const fields = mapVlmRunResponse(CMS1500, response, MAP);
+    const line0 = fields.find((f) => f.path === 'serviceLines[0].cptHcpcs')!;
+    expect(line0).toMatchObject({ value: '99213', confidence: 95, page: 1 });
+    expect(fields.find((f) => f.path === 'serviceLines[1].cptHcpcs')!.value).toBe('36415');
+    expect(
+      new Set(
+        fields.filter((f) => f.path.startsWith('serviceLines')).map((f) => f.path.split('.')[0]),
+      ).size,
+    ).toBe(6);
+    expect(fields.find((f) => f.path === 'otherFields[0]')).toMatchObject({
+      label: 'SIGNED',
+      value: 'SIGNATURE ON FILE',
+      confidence: 40,
+    });
   });
 });

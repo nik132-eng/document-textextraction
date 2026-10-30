@@ -6,6 +6,7 @@ import {
   type EngineName,
   type ExtractionEngine,
 } from './engine.port';
+import { TextractEngine } from './textract/textract.engine';
 
 @Injectable()
 export class EngineRegistry {
@@ -31,6 +32,16 @@ export class EngineRegistry {
       });
     }
     return engine;
+  }
+
+  /**
+   * OCR for classifying pages that have no text layer (scans, photos), or null when
+   * CLASSIFY_OCR=none. Boot validation guarantees textract is enabled when it is 'textract'.
+   */
+  pageOcr(): ((png: Buffer) => Promise<string>) | null {
+    if (this.cfg.classifyOcr !== 'textract') return null;
+    const engine = this.byName.get('textract');
+    return engine instanceof TextractEngine ? (png) => engine.detectText(png) : null;
   }
 
   /** Parses "textract,vlmrun" (or undefined -> default) and checks each is enabled. */

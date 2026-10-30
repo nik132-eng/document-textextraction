@@ -4,13 +4,15 @@ import { Inject, Injectable } from '@nestjs/common';
 import { createCanvas } from '@napi-rs/canvas';
 import sharp from 'sharp';
 import { APP_CONFIG, type AppConfig } from '../config/app-config';
-import type { SupportedMime } from '../common/util';
+import type { NormalizedMime } from '../common/util';
 
 export interface RasterPage {
   pageNumber: number;
   png: Buffer;
   width: number;
   height: number;
+  /** PDF text layer of this page ('' for images/scans). Used for classification, never logged. */
+  text: string;
 }
 
 // Textract sync limits (00 §4): <= 10 MB per request, <= 10,000 px per side.
@@ -21,17 +23,20 @@ const MAX_PAGES = 200;
 /**
  * File -> one PNG per page. PDFs render with pdfjs-dist + @napi-rs/canvas (no poppler),
  * images and multi-page TIFFs go through sharp. Page PNGs feed Textract (one sync call per page)
- * and the page preview endpoint. Schema engines (VLM Run, Meibel) receive the original file.
+ * and the page preview endpoint. Schema engines (VLM Run, Meibel) receive the normalized file.
+ * Word files arrive here already converted to PDF (ConverterService).
  */
 @Injectable()
 export class RasterizerService {
   constructor(@Inject(APP_CONFIG) private readonly cfg: AppConfig) {}
 
-  async rasterize(bytes: Buffer, mime: SupportedMime): Promise<RasterPage[]> {
-    const pngs =
-      mime === 'application/pdf' ? await this.renderPdf(bytes) : await this.splitImage(bytes);
+  async rasterize(bytes: Buffer, mime: NormalizedMime): Promise<RasterPage[]> {
+    const rendered =
+      mime === 'application/pdf'
+        ? await this.renderPdf(bytes)
+        : (await this.splitImage(bytes)).map((png) => ({ png, text: '' }));
     const pages: RasterPage[] = [];
-    for (const [i, png] of pngs.entries()) {
+    for (const [i, { png, text }] of rendered.entries()) {
       const fitted = await fitForTextract(png);
       const meta = await sharp(fitted).metadata();
       pages.push({
@@ -39,12 +44,13 @@ export class RasterizerService {
         png: fitted,
         width: meta.width ?? 0,
         height: meta.height ?? 0,
+        text,
       });
     }
     return pages;
   }
 
-  private async renderPdf(bytes: Buffer): Promise<Buffer[]> {
+  private async renderPdf(bytes: Buffer): Promise<{ png: Buffer; text: string }[]> {
     // pdfjs-dist is ESM-only; module=nodenext keeps this a real dynamic import in CJS output.
     const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
     const require = createRequire(__filename);
@@ -59,7 +65,7 @@ export class RasterizerService {
     try {
       if (doc.numPages > MAX_PAGES) throw new Error('RASTER_TOO_MANY_PAGES');
       const scale = this.cfg.upload.rasterDpi / 72;
-      const out: Buffer[] = [];
+      const out: { png: Buffer; text: string }[] = [];
       for (let n = 1; n <= doc.numPages; n++) {
         const page = await doc.getPage(n);
         const viewport = page.getViewport({ scale });
@@ -69,7 +75,9 @@ export class RasterizerService {
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         const params = { canvasContext: ctx, canvas, viewport };
         await page.render(params as unknown as Parameters<typeof page.render>[0]).promise;
-        out.push(canvas.toBuffer('image/png'));
+        const content = await page.getTextContent();
+        const text = content.items.map((i) => ('str' in i ? i.str : '')).join(' ');
+        out.push({ png: canvas.toBuffer('image/png'), text });
         page.cleanup();
       }
       return out;

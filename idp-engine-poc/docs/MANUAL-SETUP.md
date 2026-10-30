@@ -22,9 +22,20 @@ Sources: plan repo `docs/superpowers/plans/2026-10-28-textract-idp/01a-aws-walkt
 - [ ] pnpm 9: `corepack enable && corepack prepare pnpm@9.5.0 --activate`.
 - [ ] **Start Docker Desktop**, then run `docker compose up -d` (Postgres 15 on 5433, Redis 7 on 6380).
 - [ ] `cp .env.example .env`, `pnpm install`, `pnpm prisma:deploy`, `pnpm test`, `pnpm test:e2e`, `pnpm start:dev`, then open http://localhost:3000/docs.
-- [ ] `pnpm samples` creates the synthetic card PNG and intake PDF used below.
+- [ ] `pnpm samples` creates synthetic CMS-1500, UB-04, booking sheet (PDF + DOCX), intake, letter and card files in `samples/`.
+- [ ] Word files must be **.docx**. `.doc`, `.odt` and `.rtf` are rejected; save them as DOCX or PDF first.
 
 No poppler is needed. PDFs render with pdfjs-dist, so the `brew install poppler` step in 01a is not needed for this POC.
+
+### 0.1 Realistic test documents (do this before judging accuracy)
+
+The generated samples are **text-only** PDFs. They prove the pipeline (convert → classify → extract → rows), but they do not look like the printed red-ink forms. To measure real engine accuracy, build a small synthetic golden set (plan `07` §3):
+
+- [ ] **CMS-1500:** download the official blank fillable form (nucc.org → 1500 Claim Form). Fill 5–10 copies with **fake** data (ZZ ids, 555 phones, SAMPLE names), including 1–6 Box 24 lines. Export them as PDF. Also print and scan 2–3 to get fax/scan quality.
+- [ ] **UB-04:** take the blank UB-04 image (NUBC / your billing vendor) and fill 5–10 copies with fake data, with 3–22 revenue lines.
+- [ ] **Booking sheets:** collect one blank template per hospital you serve, as **blank templates only**. Fill them with fake data, as PDF and as Word if that's how the hospitals send them. If a hospital's captions differ a lot, add a JSON variant in `FORMS_DIR` (README §2).
+- [ ] For each file, write the expected values by hand (`expected.json`). This is the contract the eval compares against.
+- [ ] Upload with `engines=textract,vlmrun,meibel` and review `/compare`. Tune `keyAliases` / `cues` in the definitions where Textract misses a caption.
 
 ## 1. Amazon Textract (dev track, synthetic data)
 
@@ -70,7 +81,9 @@ This follows `01a` Track 1. **Never create IAM access keys and never put keys in
    AWS_PROFILE=idp-dev
    ENGINES_ENABLED=fake,textract
    ENGINE_DEFAULT=textract
+   CLASSIFY_OCR=textract        # optional: lets scans/photos (no text layer) be auto-classified, ≤3 pages × $0.0015
    ```
+   Cost per page with the built-in forms (estimate): CMS-1500 ≈ $0.095 (FORMS + TABLES + 2 query batches), UB-04 ≈ $0.095, booking sheet ≈ $0.065, GENERIC ≈ $0.05.
    Restart the app, then upload a sample with `-F engines=textract`.
 
 ## 2. VLM Run (synthetic only on the free plan)
