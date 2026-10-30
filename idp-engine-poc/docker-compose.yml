@@ -1,0 +1,26 @@
+# Dev dependencies only. Ports are shifted (5433, 6380) so they don't clash with local installs.
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: idp
+      POSTGRES_PASSWORD: idp
+      POSTGRES_DB: idp_poc
+    ports:
+      - '5433:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U idp -d idp_poc']
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    # BullMQ needs noeviction, or Redis can silently drop queued jobs.
+    command: ['redis-server', '--maxmemory-policy', 'noeviction']
+    ports:
+      - '6380:6379'
+
+volumes:
+  pgdata:

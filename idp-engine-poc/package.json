@@ -1,0 +1,77 @@
+{
+  "name": "idp-engine-poc",
+  "version": "0.1.0",
+  "private": true,
+  "description": "POC: one document-extraction pipeline with swappable engines (Amazon Textract, VLM Run, Meibel)",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@9.5.0",
+  "scripts": {
+    "build": "nest build",
+    "start": "node dist/main.js",
+    "start:dev": "nest start --watch",
+    "start:worker": "APP_ROLE=worker node dist/main.js",
+    "postinstall": "prisma generate",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:deploy": "prisma migrate deploy",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint \"{src,test}/**/*.ts\"",
+    "format": "prettier --write \"{src,test}/**/*.ts\"",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "samples": "nest build && node dist/testing/make-samples.js"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "3.958.0",
+    "@aws-sdk/client-textract": "3.958.0",
+    "@napi-rs/canvas": "0.1.100",
+    "@nestjs/common": "11.0.1",
+    "@nestjs/config": "4.0.2",
+    "@nestjs/core": "11.0.1",
+    "@nestjs/platform-express": "11.0.1",
+    "@nestjs/swagger": "11.2.3",
+    "@nestjs/terminus": "11.0.0",
+    "@prisma/adapter-pg": "7.4.1",
+    "@prisma/client": "7.4.1",
+    "bullmq": "5.81.5",
+    "class-transformer": "0.5.1",
+    "class-validator": "0.14.3",
+    "express": "5.2.1",
+    "joi": "18.0.2",
+    "pdfjs-dist": "5.7.284",
+    "pg": "8.16.3",
+    "pino": "10.1.0",
+    "reflect-metadata": "0.2.2",
+    "rxjs": "7.8.1",
+    "sharp": "0.34.5"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.18.0",
+    "@nestjs/cli": "11.0.0",
+    "@nestjs/schematics": "11.0.0",
+    "@nestjs/testing": "11.0.1",
+    "@swc/core": "1.16.20",
+    "@types/express": "5.0.0",
+    "@types/multer": "1.4.12",
+    "@types/node": "22.19.1",
+    "@types/supertest": "6.0.2",
+    "aws-sdk-client-mock": "4.1.0",
+    "eslint": "9.18.0",
+    "prettier": "3.4.2",
+    "prisma": "7.4.1",
+    "supertest": "7.0.0",
+    "typescript": "5.7.3",
+    "typescript-eslint": "8.20.0",
+    "unplugin-swc": "2.0.0",
+    "vitest": "3.2.4"
+  },
+  "pnpm": {
+    "overrides": {
+      "express": "5.2.1"
+    }
+  }
+}

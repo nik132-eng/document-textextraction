@@ -1,0 +1,105 @@
+// POC subset of the plan's data model (02-data-model.md) plus the EngineCall idea from
+// docs/research/vendors/shared-engine-adapter.md §7, folded into Extraction.
+// Every row carries tenantId; every query filters by it.
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum ExtractionStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+model Document {
+  id          String       @id @default(uuid()) @db.Uuid
+  tenantId    String
+  sha256      String
+  mimeType    String
+  sizeBytes   Int
+  pageCount   Int
+  formType    String
+  storageKey  String
+  createdAt   DateTime     @default(now())
+  pages       Page[]
+  extractions Extraction[]
+
+  @@unique([tenantId, sha256])
+  @@map("idp_document")
+}
+
+model Page {
+  id         String   @id @default(uuid()) @db.Uuid
+  tenantId   String
+  documentId String   @db.Uuid
+  pageNumber Int
+  storageKey String
+  sha256     String
+  widthPx    Int
+  heightPx   Int
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, pageNumber])
+  @@map("idp_page")
+}
+
+/// One run of one engine over one document. Raw vendor output is stored (gzip JSON) and never changed.
+model Extraction {
+  id           String           @id @default(uuid()) @db.Uuid
+  tenantId     String
+  documentId   String           @db.Uuid
+  engine       String // textract | vlmrun | meibel | fake
+  formType     String
+  formVersion  Int
+  schemaHash   String
+  requestHash  String // sha256(engine|form|version|schemaHash|document sha256) -> reuse instead of paying twice
+  status       ExtractionStatus @default(QUEUED)
+  needsReview  Boolean          @default(false)
+  externalId   String? // vendor job / prediction id
+  rawKey       String?
+  costUsd      Decimal?         @db.Decimal(10, 5) // actual, when the vendor reports it
+  estCostUsd   Decimal?         @db.Decimal(10, 5)
+  latencyMs    Int?
+  modelVersion String?
+  errorCode    String? // code only, never content
+  attempts     Int              @default(0)
+  createdAt    DateTime         @default(now())
+  startedAt    DateTime?
+  finishedAt   DateTime?
+  document     Document         @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  fields       ExtractedField[]
+
+  @@index([tenantId, requestHash])
+  @@index([documentId])
+  @@map("idp_extraction")
+}
+
+/// EAV field row with provenance (page, bbox, confidence) and review flags.
+model ExtractedField {
+  id               String     @id @default(uuid()) @db.Uuid
+  tenantId         String
+  extractionId     String     @db.Uuid
+  path             String // native path, e.g. member.id
+  label            String
+  canonicalKey     String?
+  valueType        String // text | date | checkbox | ...
+  value            Json? // string | boolean | null, as printed
+  confidence       Float? // 0..100, null = engine gave none
+  confidenceSource String // numeric | band | judged | none
+  page             Int?
+  bbox             Json? // { left, top, width, height } normalized 0..1
+  groundingText    String?
+  flags            String[]
+  extraction       Extraction @relation(fields: [extractionId], references: [id], onDelete: Cascade)
+
+  @@unique([extractionId, path])
+  @@map("idp_extracted_field")
+}

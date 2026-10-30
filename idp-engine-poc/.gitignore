@@ -1,0 +1,10 @@
+node_modules/
+dist/
+coverage/
+.data/
+.env
+src/generated/
+*.tsbuildinfo
+samples/out/
+.data-e2e/
+samples/

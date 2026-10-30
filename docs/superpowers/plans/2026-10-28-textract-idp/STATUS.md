@@ -11,6 +11,7 @@
 - [x] One-shot host implementation prompt (`09`)
 - [x] Guided AWS walkthrough (`01a`)
 - [x] Vendor research: VLM Run and Meibel, with a comparison, a shared engine adapter and implementation plans ([`docs/research/vendors/`](../../../research/vendors/README.md))
+- [x] Engine POC (2026-10-30), in [`idp-engine-poc/`](../../../../idp-engine-poc/README.md) at the repo root (Node 22, Nest 11, Prisma 7.4, BullMQ): one `ExtractionEngine` seam with Textract, VLM Run, Meibel and fake adapters chosen by env, plus a per-document compare endpoint. This is evidence for Q15. Vendor response shapes are still UNVERIFIED until the first synthetic run (POC `docs/MANUAL-SETUP.md` §4)
 
 ## Left to do — before or alongside the build (not coding)
 
