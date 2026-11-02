@@ -36,6 +36,7 @@
 | [`08-integration-scan-prompt.md`](08-integration-scan-prompt.md) | Read-only prompt: an agent scans a host project and writes an integration report (where and how IDP plugs in) | Fit check only, or as step 1 of 09 |
 | [`../../../research/vendors/`](../../../research/vendors/README.md) | Research + implementation plans for **VLM Run** and **Meibel** as extra engines, a comparison with Textract, and the shared adapter (proposed D14) | Before deciding on a second engine |
 | [`09-host-implementation-prompt.md`](09-host-implementation-prompt.md) | **The one prompt for building it in the host.** Scan (08) → host conventions map → checkpoint → build the requested scope task by task in the host's own style | When you start building |
+| [`10-host-vlm-primary-prompt.md`](10-host-vlm-primary-prompt.md) | **Variant of 09 with VLM Run primary and Textract fallback (env-routed, D15).** Learns plan + research + POC, scans the host, writes DESIGN/ADR/ADAPTATION, checkpoint, builds slices S0–S6 | When VLM Run is the primary engine |
 
 ---
 

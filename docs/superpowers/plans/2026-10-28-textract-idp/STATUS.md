@@ -33,7 +33,7 @@
 | Q12 | IaC tool and location (the host's CDK/Terraform folder, or `infra/idp/`) | Ops | Track 2 |
 | Q13 | Real package scope instead of `@your-org/idp`; the `HOST_NAME_DENYLIST` values | Tech lead | P0 Task 0.6, P9 Task 9.10 |
 | Q14 | Textract bundled pricing for FORMS+TABLES+QUERIES: confirm against the first invoice (`04` §9) | Ops / finance | Cost report accuracy only |
-| Q15 | Accept D14 (multi-engine: Textract default + schema engines)? ([shared adapter](../../../research/vendors/shared-engine-adapter.md) §1) | Tech lead + product | Shared tasks S1–S8 |
+| Q15 | Accept D14 (multi-engine: Textract default + schema engines)? ([shared adapter](../../../research/vendors/shared-engine-adapter.md) §1). **Direction given 2026-11-02: D15 = VLM Run primary, Textract fallback via env** ([`10`](10-host-vlm-primary-prompt.md)); the host agent records it as an ADR | Tech lead + product | Shared tasks S1–S8, prompt 10 |
 | Q16 | VLM Run: go to Pro ($799/mo) and sign the BAA? Send the vendor questions ([research §8](../../../research/vendors/vlm-run/research.md)) | Product + compliance | VLM Run with real PHI (V0) |
 | Q17 | Meibel: send the vendor questions ([research §8](../../../research/vendors/meibel/research.md)). Pursue only if a BAA/BYOC is available and agents/Q&A are wanted | Product + compliance | Meibel plan (MB0) |
 
